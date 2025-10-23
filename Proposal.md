@@ -1,42 +1,47 @@
-# FinSight: Predicting Bitcoin Price Movements Using Technical Indicators and Machine Learning
+# Finsight: Testing and Comparing Investment Strategies with Backtesting
 
 ## Problem Statement and Motivation
-Cryptocurrency markets, and Bitcoin in particular, are characterized by high volatility and complex short-term dynamics that attract both traders and researchers. Traditional technical analysis tools — such as moving averages, RSI, and MACD — are widely used to interpret price charts, but their effectiveness depends heavily on the trader’s experience and subjective interpretation.
-As someone passionate about finance and data analysis, I am particularly interested in exploring how quantitative methods and machine learning can be applied to financial markets, especially within the context of Bitcoin.
-The motivation behind FinSight is to create a fully data-driven model capable of learning from historical Bitcoin price data and predicting short-term price movements (up or down) using combinations of technical indicators.  
-The project aims to bridge the gap between traditional technical analysis and machine learning by providing a reproducible, transparent framework that can quantitatively evaluate and test trading hypotheses.
+In financial markets, investors use various strategies, from passive "buy and hold" investing to more active, rule-based approaches such as momentum or mean reversion. While these strategies are often discussed in theory, few individual investors have the tools to systematically test and compare their real performance over time.
+
+As someone passionate about finance and investment, I aim to build a data-driven framework that evaluates multiple investment strategies using real market data. The goal of Finsight is not to predict prices but to determine which types of strategies perform best under different market conditions. By backtesting and comparing results, the project will highlight the strengths and weaknesses of common quantitative approaches and bridge the gap between financial theory and real-world performance.
 
 ## Planned Approach and Technologies
-The project will use Python 3.11 and follow a modular design to ensure clarity, scalability, and maintainability.  
+The project will be implemented in Python 3.11 with a modular structure for clarity and reproducibility.  
 Main components include:
-- Data Collection: Using the yfinance library to download historical Bitcoin (BTC-USD) price data.
-- Feature Engineering: Computing common technical indicators (RSI, MACD, Bollinger Bands, SMA, EMA, Stochastic Oscillator) with the pandas and ta libraries.
-- Labeling: Generating binary target variables that represent future price direction (e.g., 1 for upward movement, 0 for downward).
-- Modeling: Training and comparing several machine learning models such as Logistic Regression, Random Forest, and XGBoost using scikit-learn.
-- Evaluation: Assessing model accuracy, precision, and recall; visualizing confusion matrices and performance curves with matplotlib.
-- Visualization: (Optional) Building a small Streamlit dashboard showing Bitcoin charts with predicted buy/sell signals.
 
-All code will be organized under src/, tested with pytest, formatted using black, and linted with flake8. Continuous Integration via GitHub Actions will ensure quality control and automated testing.
+- Data Collection: Using the yfinance library to download historical daily prices for a diversified set of stocks (for example, companies from the S&P 500) to evaluate performance across sectors.  
+- Feature Engineering: Calculating returns, moving averages, and volatility with pandas and numpy.  
+- Strategy Implementation: Coding several investment strategies:
+  - Buy and Hold (benchmark)
+  - Momentum (buy recent winners)
+  - Mean Reversion (buy recent losers)
+  - Moving Average Crossover (technical trading rule)
+- Backtesting Engine: Simulating each strategy’s performance over time, reinvesting gains and tracking portfolio evolution.  
+- Evaluation Metrics: Comparing annualized return, volatility, Sharpe ratio, and maximum drawdown.  
+- Visualization: Plotting equity curves, risk/return comparisons, and heatmaps of performance using matplotlib or plotly.
+
+Instead of focusing on a few individual assets, each strategy will be applied to a broader universe of stocks to enable a robust comparison and identify which approaches perform consistently across market environments.
+
+All code will be tested with pytest, formatted using black, and linted with flake8. Continuous Integration via GitHub Actions will ensure code quality and reproducibility.
 
 ## Expected Challenges and Mitigation
-- Noisy and volatile data: Addressed through smoothing and the use of multiple time-based indicators.
-- Overfitting: Avoided through time-series cross-validation and regularization.
-- Data leakage: Prevented by proper chronological train-test splits.
-- Model interpretability: Enhanced by analyzing feature importance and comparing multiple algorithms.
+- Data quality and missing values: Managed through preprocessing and validation.  
+- Look-ahead bias: Avoided by careful time-based simulation logic.  
+- Overfitting: Controlled by limiting strategy parameters and using realistic assumptions.  
+- Interpretability: Ensured through clear performance metrics and visualization.
 
 ## Success Criteria
 The project will be considered successful if:
-- The trained model consistently outperforms a random or naïve baseline, achieving an accuracy higher than 55 % on unseen Bitcoin price data.
-- Results are reproducible through documented, modular code and a clear workflow.
-- Visualizations effectively communicate model performance and predicted trends.
-- The repository adheres to clean coding, documentation, and testing best practices.
+- At least three investment strategies are implemented, tested, and compared on real data.  
+- Results are reproducible and supported by visualizations.  
+- The analysis identifies conditions where each strategy performs best.  
+- The repository follows clean coding and documentation standards.
 
 ## Stretch Goals (if time permits)
-- Add a backtesting engine to simulate trading performance based on model predictions.
-- Implement a simple LSTM neural network for sequence-based learning.
-- Deploy a Streamlit web app for real-time Bitcoin price visualization and predictions.
+- Add simple machine learning to detect favorable market regimes.  
+- Combine strategies to compare portfolio-level performance.  
+- Build a Streamlit dashboard for interactive backtesting and visualization.
 
 ---
 
-In summary, FinSight will explore whether machine learning can identify meaningful trading signals in Bitcoin price data by combining statistical modeling and technical analysis, resulting in a transparent, testable, and extensible financial prediction system.
-
+In summary, Finsight provides a transparent and educational framework for understanding how different investment strategies perform in practice. Rather than predicting prices, the project uses historical data to evaluate and compare systematic approaches in a rigorous, data-driven way.
