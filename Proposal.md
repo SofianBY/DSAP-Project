@@ -1,47 +1,51 @@
-# Finsight: Testing and Comparing Investment Strategies with Backtesting
 
-## Problem Statement and Motivation
-In financial markets, investors use various strategies, from passive "buy and hold" investing to more active, rule-based approaches such as momentum or mean reversion. While these strategies are often discussed in theory, few individual investors have the tools to systematically test and compare their real performance over time.
+# Finsight: Using Machine Learning to Dynamically Select Investment Strategies Based on Market Regimes
 
-As someone passionate about finance and investment, I aim to build a data-driven framework that evaluates multiple investment strategies using real market data. The goal of Finsight is not to predict prices but to determine which types of strategies perform best under different market conditions. By backtesting and comparing results, the project will highlight the strengths and weaknesses of common quantitative approaches and bridge the gap between financial theory and real-world performance.
+## Project Category  
+Data Science / Machine Learning applied to Finance  
 
-## Planned Approach and Technologies
-The project will be implemented in Python 3.11 with a modular structure for clarity and reproducibility.  
-Main components include:
+## Problem Statement and Motivation  
+Financial markets evolve through different regimes such as periods of high volatility, strong upward trends, or market corrections. Traditional investment strategies like buy-and-hold, momentum, and mean reversion perform differently under these conditions but are usually applied in a static way, without adapting to changing environments.  
 
-- Data Collection: Using the yfinance library to download historical daily prices for a diversified set of stocks (for example, companies from the S&P 500) to evaluate performance across sectors.  
-- Feature Engineering: Calculating returns, moving averages, and volatility with pandas and numpy.  
-- Strategy Implementation: Coding several investment strategies:
-  - Buy and Hold (benchmark)
-  - Momentum (buy recent winners)
-  - Mean Reversion (buy recent losers)
-  - Moving Average Crossover (technical trading rule)
-- Backtesting Engine: Simulating each strategy’s performance over time, reinvesting gains and tracking portfolio evolution.  
-- Evaluation Metrics: Comparing annualized return, volatility, Sharpe ratio, and maximum drawdown.  
-- Visualization: Plotting equity curves, risk/return comparisons, and heatmaps of performance using matplotlib or plotly.
+The goal of this project is to build a machine learning model capable of identifying market regimes and predicting which investment strategy is likely to perform best in the near future. This approach aims to create an adaptive investment system that dynamically switches between strategies based on predicted market conditions.  
 
-Instead of focusing on a few individual assets, each strategy will be applied to a broader universe of stocks to enable a robust comparison and identify which approaches perform consistently across market environments.
+As someone passionate about finance, this project represents an opportunity to apply quantitative methods to portfolio management and explore how machine learning can enhance traditional investment logic.
 
-All code will be tested with pytest, formatted using black, and linted with flake8. Continuous Integration via GitHub Actions will ensure code quality and reproducibility.
+## Planned Approach and Technologies  
+The project will be implemented in Python 3.11 following a clear, modular, and reproducible structure.  
 
-## Expected Challenges and Mitigation
-- Data quality and missing values: Managed through preprocessing and validation.  
-- Look-ahead bias: Avoided by careful time-based simulation logic.  
-- Overfitting: Controlled by limiting strategy parameters and using realistic assumptions.  
-- Interpretability: Ensured through clear performance metrics and visualization.
+**Main steps include:**  
+1. **Data Collection and Preparation**  
+   - Retrieve historical market data (indices or ETFs) using the `yfinance` API.  
+   - Compute financial indicators such as volatility, trend strength (RSI, MACD, SMA), and correlations between assets.
+2. **Feature Engineering and Labeling**  
+   - Create input features describing volatility regimes, trend indicators, correlation structures, and simple macroeconomic variables (e.g., VIX index, interest rate).  
+   - Define the target variable as the investment strategy (momentum, mean reversion, or buy-and-hold) that achieved the best performance in the following time period.  
 
-## Success Criteria
-The project will be considered successful if:
-- At least three investment strategies are implemented, tested, and compared on real data.  
-- Results are reproducible and supported by visualizations.  
-- The analysis identifies conditions where each strategy performs best.  
-- The repository follows clean coding and documentation standards.
+3. **Modeling**  
+   - Train and compare several models, including Logistic Regression, Random Forest, and Gradient Boosting.  
+   - Use time-series cross-validation to prevent data leakage and ensure realistic evaluation.  
 
-## Stretch Goals (if time permits)
-- Add simple machine learning to detect favorable market regimes.  
-- Combine strategies to compare portfolio-level performance.  
-- Build a Streamlit dashboard for interactive backtesting and visualization.
+4. **Dynamic Backtesting**  
+   - Use model predictions to dynamically select the strategy to apply at each time step.  
+   - Compare the ML-based adaptive portfolio to static strategies in terms of cumulative return, volatility, and Sharpe ratio.  
+
+## Expected Challenges and How They’ll Be Addressed  
+- **Overfitting:** Controlled through regularization and time-based validation.  
+- **Noisy financial data:** Mitigated by smoothing indicators and selecting robust features.  
+- **Interpretability:** Improved by analyzing feature importance and comparing model behavior across market conditions.  
+
+## Success Criteria  
+The project will be considered successful if:  
+- The adaptive ML model outperforms static strategies during backtesting.  
+- Results are reproducible and supported by clear visualizations.  
+- The repository follows good coding practices and documentation standards.  
+
+## Stretch Goals (if time permits)  
+- Extend the model to include multiple asset classes such as bonds or cryptocurrencies.  
+- Develop a simple Streamlit dashboard to visualize detected market regimes and strategy decisions in real time.  
 
 ---
 
-In summary, Finsight provides a transparent and educational framework for understanding how different investment strategies perform in practice. Rather than predicting prices, the project uses historical data to evaluate and compare systematic approaches in a rigorous, data-driven way.
+In summary, Finsight combines financial analysis and machine learning to build an adaptive portfolio management system capable of identifying market conditions and selecting the most appropriate investment strategy dynamically, bridging traditional financial intuition with data-driven decision-making.
+
