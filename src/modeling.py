@@ -15,24 +15,24 @@ from src import config
 
 
 # ----------------------------------------------------------
-# 1) LOAD LABELED DATA
+# 1) LOAD LABELED DATA — FIXED DATE HANDLING
 # ----------------------------------------------------------
 
 def load_labeled_data() -> pd.DataFrame:
     """
-    Load the labeled dataset from the processed directory.
-    Ensures Date is parsed and used as index.
+    Load labeled_data.csv and ensure the 'date' column is parsed correctly.
     """
     file_path = config.PROCESSED_DATA_DIR / "labeled_data.csv"
     df = pd.read_csv(file_path)
 
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df = df.dropna(subset=["Date"]).sort_values("Date").set_index("Date")
+    # Correct column is lowercase 'date'
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"]).sort_values("date").set_index("date")
     else:
-        # fallback if Date column is missing
-        df.index = pd.to_datetime(df.index, errors="ignore")
-        df = df.sort_index()
+        raise ValueError(
+            f"No 'date' column found in {file_path}. Columns found: {df.columns}"
+        )
 
     return df
 
@@ -49,7 +49,6 @@ def prepare_features_and_target(df: pd.DataFrame):
 
     df = df.dropna(subset=[target_col])
 
-    # numeric columns only
     feature_cols = [
         col for col in df.columns
         if col != target_col and pd.api.types.is_numeric_dtype(df[col])
@@ -75,7 +74,7 @@ def encode_target(y: pd.Series):
 
 
 # ----------------------------------------------------------
-# 4) TIME SERIES CROSS VALIDATION (GENERIC FOR ALL MODELS)
+# 4) GENERIC TIME SERIES CROSS-VALIDATION
 # ----------------------------------------------------------
 
 def time_series_cv_model(name: str, model, X, y, n_splits=5):
@@ -104,11 +103,7 @@ def time_series_cv_model(name: str, model, X, y, n_splits=5):
         acc = accuracy_score(y_test, y_pred)
         bal_acc = balanced_accuracy_score(y_test, y_pred)
 
-        try:
-            print(f"Fold {fold}  | test period: {X_test.index[0]} → {X_test.index[-1]}")
-        except:
-            print(f"Fold {fold}")
-
+        print(f"Fold {fold}  | {X_test.index[0].date()} → {X_test.index[-1].date()}")
         print(f"Accuracy: {acc:.4f}   | Balanced Acc: {bal_acc:.4f}\n")
 
         fold_accuracies.append(acc)
@@ -124,7 +119,6 @@ def time_series_cv_model(name: str, model, X, y, n_splits=5):
     print(f"Avg Accuracy:     {np.mean(fold_accuracies):.4f}")
     print(f"Avg Balanced Acc: {np.mean(fold_balanced):.4f}\n")
 
-    # classification report on last test fold
     if last_X_test is not None:
         y_last_pred = final_model.predict(last_X_test)
         print(f"{name} - Classification report (last fold):")
@@ -140,16 +134,13 @@ def time_series_cv_model(name: str, model, X, y, n_splits=5):
 def main():
     print(">>> modeling.py started")
 
-    # load data
     df = load_labeled_data()
     print("Data shape:", df.shape)
 
-    # features + target
     X, y = prepare_features_and_target(df)
     print("Features shape:", X.shape)
     print("Target distribution:\n", y.value_counts())
 
-    # encode target
     y_encoded, le = encode_target(y)
     print("\nEncoded classes:", list(le.classes_))
 
@@ -159,7 +150,7 @@ def main():
     # MODELS WITH CLASS WEIGHTS
     # ------------------------------------------------------
 
-    # 1) Logistic Regression
+    # 1) Logistic Regression — BEST STARTING POINT
     log_reg = Pipeline(steps=[
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
@@ -188,7 +179,7 @@ def main():
         rf, X, y_encoded, n_splits
     )
 
-    # 3) Gradient Boosting (pas de class_weight)
+    # 3) Gradient Boosting
     gb = GradientBoostingClassifier(
         n_estimators=200,
         learning_rate=0.05,
@@ -217,6 +208,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
