@@ -106,7 +106,6 @@ def main():
             (
                 "clf",
                 LogisticRegression(
-                    multi_class="auto",
                     max_iter=500,
                     C=0.5,
                     class_weight="balanced",
