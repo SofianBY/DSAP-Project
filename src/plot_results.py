@@ -67,17 +67,25 @@ def plot_performance_bar(perf_path: Path, fig_path: Path):
 def main():
     print(">>> Generating figures...")
 
-    # -------- SP500 (si dispo) --------
-    sp500_dir = DATA_RESULTS_DIR / "sp500"
-    sp500_eq = sp500_dir / "equity_curves.csv"
-    if sp500_eq.exists():
-        plot_equity_curves(
-            sp500_eq,
-            FIG_DIR / "sp500_equity_curves.png",
-            "SP500 – Equity curves",
-        )
-    else:
-        print("[WARN] SP500 equity not found, skipping.")
+    # -------- SP500 --------
+
+sp500_dir = DATA_RESULTS_DIR / "sp500"
+
+sp500_eq_candidates = [
+    sp500_dir / "equity_curves_sp500.csv",
+    sp500_dir / "equity_curves.csv",
+]
+sp500_eq = next((p for p in sp500_eq_candidates if p.exists()), None)
+
+if sp500_eq is not None:
+    plot_equity_curves(
+        sp500_eq,
+        FIG_DIR / "sp500_equity_curves.png",
+        "SP500 – Equity curves",
+    )
+else:
+    print("[WARN] SP500 equity not found, skipping.")
+
 
     # -------- BTC monthly --------
     btc_dir = DATA_RESULTS_DIR / "btc"
