@@ -7,8 +7,9 @@ venv/
 .env/
 
 # Data
-# Keep raw data in the repository
+# Keep raw data in the repository (data/raw is NOT ignored)
 data/processed/
+!data/processed/labeled_data_btc.csv
 data/results/
 
 # Notebooks checkpoints
