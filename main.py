@@ -1,14 +1,10 @@
-# main.py — top-level entry point required by the course
-# This simply calls the full Finsight pipeline defined in src/main.py
-
+import warnings
 from src.main import run_finsight_pipeline
 
-
-def main():
-    """Wrapper so that the graders can call `python main.py`."""
-    run_finsight_pipeline()
+# On coupe tous les warnings moches (sklearn, pandas, etc.)
+warnings.filterwarnings("ignore")
 
 
 if __name__ == "__main__":
-    main()
-
+    print("\n==================== FULL FINSIGHT PIPELINE ====================\n")
+    run_finsight_pipeline()

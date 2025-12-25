@@ -16,7 +16,7 @@ from src import config
 
 def load_labeled_data() -> pd.DataFrame:
     """
-    Charge labeled_data.csv et prépare un index temporel correct.
+    Load labeled daily data from data/processed/labeled_data.csv
     """
     file_path = config.PROCESSED_DATA_DIR / "labeled_data.csv"
     df = pd.read_csv(file_path)
@@ -36,11 +36,12 @@ def load_labeled_data() -> pd.DataFrame:
 
 def build_monthly_dataset(df: pd.DataFrame):
     """
-    Construit un dataset mensuel à partir des données journalières :
-      - 1 ligne = dernier jour de chaque mois
-      - features = colonnes numériques
-      - target = best_strategy du mois
-    """
+    Builds a monthly dataset from daily data:
+        - 1 row = last day of each month
+        - features = numeric columns
+        - target = best_strategy of the month"""
+   
+    
     df = df.copy()
     df["month"] = df.index.to_period("M")
 

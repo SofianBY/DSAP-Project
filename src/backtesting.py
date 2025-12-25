@@ -1,457 +1,420 @@
 """
-backtesting.py
+backtesting.py — SP500 simple backtest + ML Adaptive (SPY).
 
-Monthly backtest for:
-  - Buy & Hold
-  - Momentum
-  - Mean Reversion
-  - ML Adaptive strategy (multi-class: choose between the 3)
-  - Oracle (best ex post among the 3)
-
-The time horizon remains MONTHLY (as in the project proposal),
-but we build RICHER MONTHLY FEATURES by aggregating daily data,
-including technical indicators and macro variables.
+This script:
+  1) Loads daily SPY prices from data/raw.
+  2) Computes monthly returns.
+  3) Builds three simple strategies:
+       - Buy & Hold
+       - Momentum (invested if previous month > 0)
+       - Mean Reversion (invested if previous month < 0)
+     + an ex-post Oracle (best of the 3 each month).
+  4) Builds a monthly ML dataset:
+       - features = functions of past returns (ret_1m, ret_3m, ret_6m, vol_3m, vol_6m)
+       - label = ex-post optimal strategy for the following month
+     and runs a walk-forward backtest of the "ML Adaptive" strategy.
+  5) Computes performance statistics.
+  6) Saves results to:
+       data/results/sp500/monthly_returns_sp500.csv
+       data/results/sp500/equity_curves_sp500.csv
+       data/results/sp500/performance_summary_sp500.csv
 """
 
-import warnings
+from __future__ import annotations
 
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-from dataclasses import dataclass
-from typing import Dict, Any, Tuple
+from pathlib import Path
+from typing import Dict
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.pipeline import Pipeline
+
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 
 
-@dataclass
-class StrategyStats:
-    """Container for performance metrics of one strategy."""
+# ---------------------------------------------------------------------
+# 1. PATHS
+# ---------------------------------------------------------------------
 
-    total_return: float
-    annualized_return: float
-    annualized_vol: float
-    sharpe: float
-    max_drawdown: float
+BASE_DIR = Path(__file__).resolve().parents[1]
+RAW_DIR = BASE_DIR / "data" / "raw"
+SP500_RESULTS_DIR = BASE_DIR / "data" / "results" / "sp500"
+SP500_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_labeled_daily_data(path: str = "data/processed/labeled_data.csv") -> pd.DataFrame:
+# ---------------------------------------------------------------------
+# 2. UTILITY: FIND THE SPY PRICE FILE
+# ---------------------------------------------------------------------
+
+def find_spy_price_file() -> Path:
     """
-    Load the daily labeled dataset produced by:
-      - features.py
-      - labeling.py
-      - enrich_features.py
-
-    In practice, our CSV has the date as the first column (index).
-    We read that first column as the index and convert it to datetime.
+    Looks for a reasonable SPY price file in data/raw.
+    Tries a few standard names, then falls back to the first CSV found.
     """
-    df = pd.read_csv(path, index_col=0)
-    try:
-        df.index = pd.to_datetime(df.index)
-    except Exception as e:
+    candidates = [
+        "SPY_prices.csv",
+        "SPY.csv",
+        "spy_prices.csv",
+        "spy.csv",
+        "sp500_prices.csv",
+        "SP500_prices.csv",
+    ]
+    for name in candidates:
+        path = RAW_DIR / name
+        if path.exists():
+            return path
+
+    # fallback: any csv (better than nothing)
+    csv_files = list(RAW_DIR.glob("*.csv"))
+    if csv_files:
+        return csv_files[0]
+
+    raise FileNotFoundError(
+        f"[SP500] No CSV file found in {RAW_DIR}. "
+        "Add for example 'SPY_prices.csv'."
+    )
+
+
+# ---------------------------------------------------------------------
+# 3. LOAD PRICES AND COMPUTE MONTHLY RETURNS
+# ---------------------------------------------------------------------
+
+def load_sp500_monthly_returns() -> pd.Series:
+    """
+    Loads daily SP500/ETF SPY prices and computes
+    monthly close-to-close returns.
+
+    Hardened:
+      - automatic detection of the date column,
+      - automatic detection of the price column (Adj Close, Close, etc.),
+      - explicit numeric conversion.
+    """
+    price_file = find_spy_price_file()
+    print(f"[SP500] Loading raw prices from: {price_file}")
+
+    df = pd.read_csv(price_file)
+
+    if df.empty:
+        raise ValueError(f"[SP500] Price file {price_file} is empty.")
+
+    # 1) Date column
+    date_col = None
+    for candidate in ["date", "Date", "Datetime", "timestamp"]:
+        if candidate in df.columns:
+            date_col = candidate
+            break
+    if date_col is None:
+        date_col = df.columns[0]  # fallback
+
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.dropna(subset=[date_col]).sort_values(date_col).set_index(date_col)
+
+    # 2) Price column
+    price_candidates = ["Adj Close", "Adj_Close", "Close", "close", "Price", "price"]
+    price_col = None
+    for c in price_candidates:
+        if c in df.columns:
+            price_col = c
+            break
+    if price_col is None:
         raise ValueError(
-            "Could not parse the index of labeled_data.csv as dates. "
-            "Check how the file is saved in labeling.py / enrich_features.py."
-        ) from e
-    df.index.name = "Date"
-    return df.sort_index()
-
-
-def equity_curve(returns: pd.Series, initial: float = 1.0) -> pd.Series:
-    """Build an equity curve from a series of periodic returns."""
-    r = returns.fillna(0.0)
-    equity = (1.0 + r).cumprod()
-    return initial * equity
-
-
-def compute_performance_stats(returns: pd.Series, freq: int = 12) -> StrategyStats:
-    """
-    Compute standard performance metrics from a return series.
-
-    Args:
-        returns: periodic returns (here, monthly).
-        freq: number of periods per year (12 for monthly).
-
-    Metrics:
-        - total_return
-        - annualized_return
-        - annualized_vol
-        - sharpe (rf = 0)
-        - max_drawdown
-    """
-    r = returns.dropna()
-    if r.empty:
-        return StrategyStats(
-            total_return=np.nan,
-            annualized_return=np.nan,
-            annualized_vol=np.nan,
-            sharpe=np.nan,
-            max_drawdown=np.nan,
+            f"[SP500] Unable to find a price column in {price_file}. "
+            f"Available columns: {list(df.columns)}"
         )
 
-    equity = (1.0 + r).cumprod()
-    total_return = equity.iloc[-1] - 1.0
+    # 3) Convert to numeric
+    df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
+    df = df.dropna(subset=[price_col])
 
-    n_periods = len(r)
-    annualized_return = (1.0 + total_return) ** (freq / n_periods) - 1.0
+    if df.empty:
+        raise ValueError("[SP500] No valid prices after numeric conversion.")
 
-    annualized_vol = r.std() * np.sqrt(freq)
+    # 4) Monthly returns
+    # 'M' triggers a FutureWarning, but is still correct here.
+    monthly_close = df[price_col].resample("M").last()
+    monthly_ret = monthly_close.pct_change().dropna()
 
-    sharpe = np.nan
-    if annualized_vol > 0:
-        sharpe = annualized_return / annualized_vol
-
-    running_max = equity.cummax()
-    drawdown = equity / running_max - 1.0
-    max_drawdown = drawdown.min() if not drawdown.empty else np.nan
-
-    return StrategyStats(
-        total_return=float(total_return),
-        annualized_return=float(annualized_return),
-        annualized_vol=float(annualized_vol),
-        sharpe=float(sharpe),
-        max_drawdown=float(max_drawdown),
-    )
+    print(f"[SP500] Monthly returns shape: {monthly_ret.shape}")
+    return monthly_ret
 
 
-def build_monthly_frame(df_daily: pd.DataFrame) -> pd.DataFrame:
+# ---------------------------------------------------------------------
+# 4. BUILD SIMPLE STRATEGIES
+# ---------------------------------------------------------------------
+
+def build_sp500_strategies(monthly_ret: pd.Series) -> pd.DataFrame:
     """
-    Aggregate the daily labeled dataset to a richer monthly level.
-
-    Steps:
-      1) Attach a month period to each daily row.
-      2) For each month, compute:
-           - realized return statistics (mean, vol, skew, kurtosis),
-           - fraction of positive days,
-           - average technical indicators (RSI, MACD, etc.),
-           - macro averages (VIX, 10Y rate) and their monthly change.
-      3) Keep ONE row per month: the last calendar day of each month,
-         carrying all these aggregated features.
-      4) Compute the 3 strategy returns at monthly frequency:
-           * bh_return   : buy & hold (always invested)
-           * mom_return  : momentum (invest if previous month_return > 0)
-           * mr_return   : mean reversion (invest if previous month_return < 0)
+    Builds the returns of simple strategies based on
+    SP500 monthly returns.
     """
-    df = df_daily.copy()
+    monthly_ret = monthly_ret.sort_index()
 
-    if "Adj Close" not in df.columns:
-        raise ValueError("Adj Close column is required to compute monthly returns.")
+    bh = monthly_ret.copy()
+    prev_ret = monthly_ret.shift(1)
 
-    if "daily_return" not in df.columns:
-        df["daily_return"] = df["Adj Close"].pct_change()
+    mom = np.where(prev_ret > 0, monthly_ret, 0.0)
+    mr = np.where(prev_ret < 0, monthly_ret, 0.0)
 
-    df["month"] = df.index.to_period("M")
-    group = df.groupby("month")
-
-    # Return distribution inside the month
-    df["month_ret_mean"] = group["daily_return"].transform("mean")
-    df["month_ret_vol"] = group["daily_return"].transform("std")
-    df["month_ret_skew"] = group["daily_return"].transform(lambda x: x.skew())
-    df["month_ret_kurt"] = group["daily_return"].transform(lambda x: x.kurt())
-    df["month_pos_frac"] = group["daily_return"].transform(lambda x: (x > 0).mean())
-
-    # Macro features (if present)
-    if "vix_level" in df.columns:
-        df["vix_month_level"] = group["vix_level"].transform("mean")
-        df["vix_month_trend"] = group["vix_level"].transform(lambda x: x.iloc[-1] - x.iloc[0])
-
-    if "rate_10y" in df.columns:
-        df["rate_10y_month_level"] = group["rate_10y"].transform("mean")
-        df["rate_10y_month_change"] = group["rate_10y"].transform(lambda x: x.iloc[-1] - x.iloc[0])
-
-    # Technical indicators aggregated over the month (if present)
-    tech_cols = [
-        "rsi_14",
-        "rolling_volatility",
-        "sma_20",
-        "sma_50",
-        "ema_20",
-        "macd",
-        "macd_signal",
-        "macd_hist",
-    ]
-    for col in tech_cols:
-        if col in df.columns:
-            df[f"{col}_month_mean"] = group[col].transform("mean")
-
-    # Reduce to one row per month (last daily row of the month)
-    monthly = group.tail(1).copy()
-    monthly.index = monthly["month"].dt.to_timestamp("M")
-
-    # Compute realized monthly return
-    monthly["month_return"] = monthly["Adj Close"].pct_change()
-
-    # Strategy returns:
-    # Buy & Hold
-    monthly["bh_return"] = monthly["month_return"]
-
-    # Momentum: invest this month if previous month_return > 0
-    prev_ret = monthly["month_return"].shift(1)
-    monthly["mom_signal"] = (prev_ret > 0).astype(float)
-    monthly["mom_return"] = monthly["mom_signal"] * monthly["month_return"]
-
-    # Mean Reversion: invest this month if previous month_return < 0
-    monthly["mr_signal"] = (prev_ret < 0).astype(float)
-    monthly["mr_return"] = monthly["mr_signal"] * monthly["month_return"]
-
-    # Drop rows where strategy returns are NaN (first month)
-    monthly = monthly.dropna(subset=["month_return", "bh_return", "mom_return", "mr_return"])
-
-    monthly = monthly.drop(columns=["month"])
-
-    return monthly
-
-
-def prepare_features_and_target(
-    monthly: pd.DataFrame, target_col: str = "best_strategy_3class"
-) -> Tuple[pd.DataFrame, pd.Series]:
-    """
-    Build the feature matrix X and target vector y from the monthly frame.
-
-    We explicitly exclude:
-      - target columns
-      - realized returns of the strategies
-      - any equity curves (if present)
-      - raw price columns that are not needed as features
-    """
-    if target_col not in monthly.columns:
-        raise ValueError(f"Target column '{target_col}' not found in monthly frame.")
-
-    cols_to_exclude = {
-        target_col,
-        "best_strategy",
-        "month_return",
-        "bh_return",
-        "mom_return",
-        "mr_return",
-        "bh_equity",
-        "momentum_equity",
-        "mean_reversion_equity",
-        "ml_adaptive_equity",
-        "oracle_equity",
-        "Adj Close",
-        "Close",
-        "Open",
-        "High",
-        "Low",
-        "Volume",
-    }
-
-    feature_cols = [c for c in monthly.columns if c not in cols_to_exclude]
-
-    X = monthly[feature_cols].copy()
-    y = monthly[target_col].copy()
-
-    # Drop rows where the target is NaN
-    mask = ~y.isna()
-    X = X.loc[mask]
-    y = y.loc[mask]
-
-    return X, y.astype(int)
-
-
-def run_backtest(return_details: bool = False) -> Dict[str, Any]:
-    """
-    Run a MONTHLY backtest with:
-      - Buy & Hold
-      - Momentum
-      - Mean Reversion
-      - ML Adaptive (multi-class)
-      - Oracle (best ex post)
-
-    Target definition (no look-ahead within the same month):
-      For each month t, the label is the strategy that achieves
-      the highest return in month t+1:
-        * 0 = Buy & Hold
-        * 1 = Momentum
-        * 2 = Mean Reversion
-    """
-    # 1) Load daily labeled dataset (technical + macro already merged)
-    df_daily = load_labeled_daily_data()
-    print(f"Daily labeled data shape: {df_daily.shape}")
-
-    # 2) Build richer monthly frame
-    monthly = build_monthly_frame(df_daily)
-    print(f"Monthly frame shape: {monthly.shape}")
-
-    # 3) Construct the monthly multi-class label from NEXT month's strategy returns
-    future = pd.DataFrame(
+    df_strat = pd.DataFrame(
         {
-            "bh": monthly["bh_return"].shift(-1),
-            "mom": monthly["mom_return"].shift(-1),
-            "mr": monthly["mr_return"].shift(-1),
+            "Buy & Hold": bh,
+            "Momentum": mom,
+            "Mean Reversion": mr,
         },
-        index=monthly.index,
+        index=monthly_ret.index,
     )
-    best_future = future.idxmax(axis=1)
-    mapping = {"bh": 0, "mom": 1, "mr": 2}
-    monthly["best_strategy_3class"] = best_future.map(mapping)
 
-    # 4) Prepare features and target
-    X, y = prepare_features_and_target(monthly, target_col="best_strategy_3class")
-    print(f"Monthly features shape: {X.shape}")
-    print("Multi-class target distribution (0=BH, 1=Mom, 2=MR):")
-    print(y.value_counts().sort_index().rename("count"))
-    print()
+    print(
+        f"[SP500] Strategy return matrix shape: {df_strat.shape}\n"
+        f"[SP500] Columns: {list(df_strat.columns)}"
+    )
+    return df_strat
 
-    # 5) ML pipeline: Logistic Regression with class_balance
+
+# ---------------------------------------------------------------------
+# 5. ML DATASET FOR SP500 (features + best_strategy label)
+# ---------------------------------------------------------------------
+
+def build_sp500_ml_dataset(
+    monthly_ret: pd.Series,
+    strat_rets: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Builds a monthly ML dataset for SP500.
+
+    Features (observed at the end of month t):
+      - ret_1m: return of month t
+      - ret_3m: sum of returns t, t-1, t-2
+      - ret_6m: sum of returns t..t-5
+      - vol_3m: volatility (std) of returns over 3 months
+      - vol_6m: volatility over 6 months
+
+    Label (best_strategy) for month t:
+      = strategy that will have the highest return in month t+1
+        among {Buy & Hold, Momentum, Mean Reversion}.
+    """
+    monthly_ret = monthly_ret.sort_index()
+    strat_rets = strat_rets.sort_index()
+
+    # Future returns by strategy (t+1)
+    future_rets = strat_rets.shift(-1)
+    best_strategy = future_rets[["Buy & Hold", "Momentum", "Mean Reversion"]].idxmax(axis=1)
+
+    df = pd.DataFrame(index=monthly_ret.index.copy())
+    df["ret_1m"] = monthly_ret
+    df["ret_3m"] = monthly_ret.rolling(window=3).sum()
+    df["ret_6m"] = monthly_ret.rolling(window=6).sum()
+    df["vol_3m"] = monthly_ret.rolling(window=3).std()
+    df["vol_6m"] = monthly_ret.rolling(window=6).std()
+
+    df["best_strategy"] = best_strategy
+
+    df_ml = df.dropna()
+    print(f"[SP500|ML] ML dataset shape: {df_ml.shape}")
+    print("[SP500|ML] Label distribution:")
+    print(df_ml["best_strategy"].value_counts())
+    return df_ml
+
+
+# ---------------------------------------------------------------------
+# 6. WALK-FORWARD ML ADAPTIVE BACKTEST ON SP500
+# ---------------------------------------------------------------------
+
+def run_sp500_ml_adaptive(
+    df_ml: pd.DataFrame,
+    strat_rets: pd.DataFrame,
+    min_train: int = 60,
+) -> pd.Series:
+    """
+    Monthly walk-forward backtest on SP500 with Gradient Boosting.
+
+    At each date t >= min_train:
+      - train the model on ML data from the start up to t-1,
+      - predict the strategy to use in month t,
+      - take the return of that strategy in month t.
+    """
+    df_ml = df_ml.sort_index()
+    strat_rets = strat_rets.sort_index()
+
+    feature_cols = [c for c in df_ml.columns if c != "best_strategy"]
+    X = df_ml[feature_cols]
+    y = df_ml["best_strategy"]
+
+    dates = X.index.to_list()
+    if len(dates) <= min_train:
+        raise ValueError(
+            f"[SP500|ML] Too few observations ({len(dates)}) "
+            f"for a training window of {min_train} months."
+        )
+
+    ml_returns = []
+
+    # Model: scaler + Gradient Boosting
     model = Pipeline(
         steps=[
             ("scaler", StandardScaler()),
-            (
-                "clf",
-                LogisticRegression(
-                    multi_class="auto",
-                    max_iter=1000,
-                    class_weight="balanced",
-                ),
-            ),
+            ("gb", GradientBoostingClassifier(
+                n_estimators=200,
+                learning_rate=0.05,
+                max_depth=3,
+                random_state=42,
+            )),
         ]
     )
 
-    # 6) Time-series cross-validation
-    tscv = TimeSeriesSplit(n_splits=5)
+    for i in range(min_train, len(dates)):
+        train_idx = dates[:i]
+        test_date = dates[i]
 
-    ml_returns = pd.Series(index=X.index, dtype=float)
-    ml_chosen_class = pd.Series(index=X.index, dtype=float)
-
-    for fold_idx, (train_idx, test_idx) in enumerate(tscv.split(X), start=1):
-        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-        y_train = y.iloc[train_idx]
+        X_train = X.loc[train_idx]
+        y_train = y.loc[train_idx]
+        X_test = X.loc[[test_date]]
 
         model.fit(X_train, y_train)
+        pred = model.predict(X_test)[0]
 
-        y_pred = model.predict(X_test)
+        if pred not in strat_rets.columns:
+            # safety fallback
+            ret = strat_rets.loc[test_date, "Buy & Hold"]
+        else:
+            ret = strat_rets.loc[test_date, pred]
 
-        test_dates = X_test.index
-        fold_ml_ret = []
-        fold_chosen_class = []
+        ml_returns.append((test_date, ret))
 
-        for date, pred_class in zip(test_dates, y_pred):
-            if pred_class == 0:
-                r = monthly.loc[date, "bh_return"]
-            elif pred_class == 1:
-                r = monthly.loc[date, "mom_return"]
-            elif pred_class == 2:
-                r = monthly.loc[date, "mr_return"]
-            else:
-                r = monthly.loc[date, "bh_return"]
-            fold_ml_ret.append(r)
-            fold_chosen_class.append(pred_class)
-
-        ml_returns.loc[test_dates] = fold_ml_ret
-        ml_chosen_class.loc[test_dates] = fold_chosen_class
-
-    ml_returns = ml_returns.fillna(0.0)
-
-    # 7) Build equity curves
-    bh_equity = equity_curve(monthly["bh_return"])
-    mom_equity = equity_curve(monthly["mom_return"])
-    mr_equity = equity_curve(monthly["mr_return"])
-    ml_equity = equity_curve(ml_returns)
-
-    oracle_returns = monthly[["bh_return", "mom_return", "mr_return"]].max(axis=1)
-    oracle_equity = equity_curve(oracle_returns)
-
-    monthly["bh_equity"] = bh_equity
-    monthly["momentum_equity"] = mom_equity
-    monthly["mean_reversion_equity"] = mr_equity
-    monthly["ml_adaptive_equity"] = ml_equity
-    monthly["oracle_equity"] = oracle_equity
-
-    # 8) Performance statistics
-    stats: Dict[str, StrategyStats] = {
-        "Buy & Hold": compute_performance_stats(monthly["bh_return"]),
-        "Momentum": compute_performance_stats(monthly["mom_return"]),
-        "Mean Reversion": compute_performance_stats(monthly["mr_return"]),
-        "ML Adaptive (BH by default)": compute_performance_stats(ml_returns),
-        "Oracle (best of 3, ex post)": compute_performance_stats(oracle_returns),
-    }
-
-    print("=== Performance summary (monthly backtest: 3 strategies + ML + Oracle) ===\n")
-    for name, s in stats.items():
-        print(f"{name}:")
-        print(f"  Total return:        {s.total_return * 100:8.2f}%")
-        print(f"  Annualized return:   {s.annualized_return * 100:8.2f}%")
-        print(f"  Annualized vol:      {s.annualized_vol * 100:8.2f}%")
-        print(f"  Sharpe ratio (rf=0): {s.sharpe:8.2f}")
-        print(f"  Max drawdown:        {s.max_drawdown * 100:8.2f}%")
-        print()
-
-    # 9) ML decision statistics
-    ml_decisions = ml_chosen_class.dropna().astype(int)
-    decision_counts = ml_decisions.value_counts(normalize=True).sort_index()
-    decision_map = {0: "Buy & Hold", 1: "Momentum", 2: "Mean Reversion"}
-    decision_label_index = decision_counts.index.map(decision_map)
-
-    print("ML Adaptive decisions (share of test months):")
-    decision_series = pd.Series(
-        decision_counts.values,
-        index=pd.Index(decision_label_index, name="chosen_strategy"),
-        name="proportion",
-    )
-    print(decision_series)
-    print()
-
-    # 10) Last 10 equity values
-    equity_curves = pd.DataFrame(
-        {
-            "BH": bh_equity,
-            "Momentum": mom_equity,
-            "Mean Reversion": mr_equity,
-            "ML Adaptive": ml_equity,
-            "Oracle": oracle_equity,
-        },
-        index=monthly.index,
+    ml_ret_series = pd.Series(
+        data=[r for (_, r) in ml_returns],
+        index=[d for (d, _) in ml_returns],
+        name="ML Adaptive",
     )
 
-    print("Last 10 equity values:")
-    print(equity_curves.tail(10))
-    print()
+    print(
+        f"[SP500|ML] Walk-forward ML Adaptive generated for "
+        f"{len(ml_ret_series)} months (training window ≥ {min_train} months)."
+    )
+    return ml_ret_series
 
-    results: Dict[str, Any] = {
-        "performance_summary": pd.DataFrame(
-            [
-                {
-                    "strategy": name,
-                    "total_return": s.total_return,
-                    "annualized_return": s.annualized_return,
-                    "annualized_vol": s.annualized_vol,
-                    "sharpe": s.sharpe,
-                    "max_drawdown": s.max_drawdown,
-                }
-                for name, s in stats.items()
-            ]
-        ).set_index("strategy"),
-        "equity_curves": equity_curves,
-        "monthly_returns": pd.DataFrame(
-            {
-                "BH": monthly["bh_return"],
-                "Momentum": monthly["mom_return"],
-                "Mean Reversion": monthly["mr_return"],
-                "ML Adaptive": ml_returns,
-                "Oracle": oracle_returns,
-            },
-            index=monthly.index,
-        ),
-        "ml_decisions": decision_series,
-        "monthly": monthly,
-    }
 
-    if return_details:
-        return results
-    else:
+# ---------------------------------------------------------------------
+# 7. PERFORMANCE STATISTICS
+# ---------------------------------------------------------------------
+
+def compute_performance_stats(returns: pd.Series) -> Dict[str, float]:
+    """
+    Total return, annualized return, annualized vol, Sharpe (rf=0),
+    and max drawdown for a series of monthly returns.
+    """
+    returns = returns.dropna()
+    if returns.empty:
         return {
-            "performance_summary": results["performance_summary"],
-            "ml_decisions": results["ml_decisions"],
+            "total_return": np.nan,
+            "annualized_return": np.nan,
+            "annualized_vol": np.nan,
+            "sharpe": np.nan,
+            "max_drawdown": np.nan,
         }
+
+    equity = (1 + returns).cumprod()
+    total_return = equity.iloc[-1] - 1.0
+
+    n_months = returns.shape[0]
+    ann_factor = 12.0 / n_months
+    annualized_return = (1 + total_return) ** ann_factor - 1.0
+
+    annualized_vol = returns.std(ddof=1) * np.sqrt(12.0)
+    sharpe = annualized_return / annualized_vol if annualized_vol > 0 else np.nan
+
+    running_max = equity.cummax()
+    drawdowns = equity / running_max - 1.0
+    max_drawdown = drawdowns.min()
+
+    return {
+        "total_return": float(total_return),
+        "annualized_return": float(annualized_return),
+        "annualized_vol": float(annualized_vol),
+        "sharpe": float(sharpe),
+        "max_drawdown": float(max_drawdown),
+    }
+
+
+# ---------------------------------------------------------------------
+# 8. MAIN: SP500 PIPELINE
+# ---------------------------------------------------------------------
+
+def main():
+    print("\n========== SP500 BACKTEST ==========\n")
+
+    # 1) Monthly returns
+    monthly_ret = load_sp500_monthly_returns()
+
+    # 2) Simple strategies
+    strat_rets = build_sp500_strategies(monthly_ret)
+
+    # 3) Ex-post Oracle (best of the 3 simple strategies)
+    oracle = strat_rets.max(axis=1)
+    oracle.name = "Oracle (best of 3, ex post)"
+
+    # 4) Initial combination (without ML)
+    rets_all = pd.concat([strat_rets, oracle], axis=1)
+
+    # 5) SP500 ML Adaptive (walk-forward)
+    try:
+        df_ml = build_sp500_ml_dataset(monthly_ret, strat_rets)
+        ml_ret = run_sp500_ml_adaptive(df_ml, strat_rets, min_train=60)
+
+        # Align to the full monthly returns index
+        ml_ret_aligned = rets_all.index.to_series().map(ml_ret).fillna(0.0)
+        rets_all["ML Adaptive"] = ml_ret_aligned.values
+
+    except Exception as e:
+        print(f"[SP500|ML] Error while building ML Adaptive: {e}")
+        print("[SP500|ML] ML Adaptive will be disabled (returns = 0).")
+        rets_all["ML Adaptive"] = 0.0
+
+    # 6) Reorder columns for readability
+    cols_order = [
+        "Buy & Hold",
+        "Momentum",
+        "Mean Reversion",
+        "ML Adaptive",
+        "Oracle (best of 3, ex post)",
+    ]
+    rets_all = rets_all[cols_order]
+
+    # 7) Equity curves
+    equity_curves = (1 + rets_all).cumprod()
+
+    # 8) Performance summary
+    perf_rows = []
+    for col in rets_all.columns:
+        stats = compute_performance_stats(rets_all[col])
+        perf_rows.append({"strategy": col, **stats})
+
+    perf_df = pd.DataFrame(perf_rows).set_index("strategy")
+
+    print("\n=== SP500 Performance summary (monthly backtest) ===\n")
+    for strategy, row in perf_df.iterrows():
+        print(f"{strategy}:")
+        print(f"  Total return:          {row['total_return'] * 100:.2f}%")
+        print(f"  Annualized return:       {row['annualized_return'] * 100:.2f}%")
+        print(f"  Annualized vol:         {row['annualized_vol'] * 100:.2f}%")
+        print(f"  Sharpe ratio (rf=0):     {row['sharpe']:.2f}")
+        print(f"  Max drawdown:          {row['max_drawdown'] * 100:.2f}%\n")
+
+    # 9) Save outputs
+    rets_path = SP500_RESULTS_DIR / "monthly_returns_sp500.csv"
+    eq_path = SP500_RESULTS_DIR / "equity_curves_sp500.csv"
+    perf_path = SP500_RESULTS_DIR / "performance_summary_sp500.csv"
+
+    rets_all.to_csv(rets_path)
+    equity_curves.to_csv(eq_path)
+    perf_df.to_csv(perf_path)
+
+    print(f"[SP500] Saved monthly returns to: {rets_path}")
+    print(f"[SP500] Saved equity curves to:   {eq_path}")
+    print(f"[SP500] Saved performance summary to: {perf_path}")
+    print("\n>>> backtesting.py (SP500) finished\n")
 
 
 if __name__ == "__main__":
-    print(">>> backtesting.py started")
-    _ = run_backtest(return_details=False)
-    print(">>> backtesting.py finished")
+    main()
