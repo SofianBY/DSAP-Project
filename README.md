@@ -38,39 +38,33 @@ All results are exported to:
 
 ## Project Structure
 
+```text
 DSAP-Project/
 ├── main.py
 ├── README.md
 ├── Proposal.md
 ├── environment.yml
-│
 ├── src/
-│   ├── main.py
-│   │
 │   ├── data_pipeline/
 │   │   ├── prepare_sp500.py
 │   │   ├── prepare_btc_monthly.py
-│   │   ├── prepare_btc_weekly.py
-│   │
+│   │   └── prepare_btc_weekly.py
 │   ├── modeling/
 │   │   ├── modeling_sp500.py
 │   │   ├── modeling_btc_monthly.py
-│   │   ├── modeling_btc_weekly.py
-│   │
+│   │   └── modeling_btc_weekly.py
 │   ├── backtesting/
 │   │   ├── backtesting.py
 │   │   ├── backtesting_btc.py
-│   │   ├── backtesting_btc_weekly.py
-│   │
+│   │   └── backtesting_btc_weekly.py
 │   └── plotting/
-│       ├── plot_results.py
-│
+│       └── plot_results.py
 ├── data/
 │   ├── raw/
-│   ├── processed/
-│   └── results/
-│
+│   └── processed/
+├── results/
 └── fig/
+
 
 
 ---
